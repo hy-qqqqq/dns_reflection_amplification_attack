@@ -23,6 +23,11 @@
 
 <h2> Usage </h2>
 
+Build dns_attack.
+```
+make
+```
+
 This will generate 3 DNS queries to the DNS Server and reflect the reponses to victim IP.
 ```
 ./dnsattack <Victim IP> <UDP Source Port> <DNS Server IP>
