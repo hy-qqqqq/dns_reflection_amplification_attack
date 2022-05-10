@@ -181,8 +181,8 @@ int main(int argc, char *argv[]) {
     // fill in destination address
     bzero(&dstaddr, sizeof(dstaddr));
     dstaddr.sin_family = AF_INET;
-    dstaddr.sin_addr.s_addr = inet_addr(argv[3]); // dnsサーバ
-    dstaddr.sin_port = htons(DNS_PORT); //dnsポート番号
+    dstaddr.sin_addr.s_addr = inet_addr(argv[3]); // dns server
+    dstaddr.sin_port = htons(DNS_PORT); // dns port
     dstlen = sizeof(dstaddr);
 
     // encapsulate the packet (from inside)
